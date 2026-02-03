@@ -16,7 +16,13 @@ class Organization(BaseModel):
     extra: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     members: Mapped[list["OrganizationMember"]] = relationship(back_populates="org")
-    plans: Mapped[list["OrganizationPlan"]] = relationship(back_populates="org")
+    plans: Mapped[list["OrganizationPlan"]] = relationship(
+        back_populates="org",
+        foreign_keys="OrganizationPlan.organization_id",
+    )
+    billing_plan: Mapped["OrganizationPlan | None"] = relationship(
+        foreign_keys=[billing_plan_id],
+    )
 
 
 class OrganizationPlan(BaseModel):
@@ -35,7 +41,10 @@ class OrganizationPlan(BaseModel):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     meta: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
-    org: Mapped["Organization | None"] = relationship(back_populates="plans")
+    org: Mapped["Organization | None"] = relationship(
+        back_populates="plans",
+        foreign_keys=[organization_id],
+    )
 
 
 class OrganizationMember(BaseModel):
