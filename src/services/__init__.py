@@ -2,6 +2,7 @@ from src.services import (
     auth,
     ev_charging,
     membership,
+    org,
     parking,
     payment,
     report,
@@ -22,4 +23,5 @@ __all__ = [
     "membership",
     "ev_charging",
     "report",
+    "org",
 ]

@@ -5,6 +5,7 @@ from src.api.v1 import (
     discounts,
     ev_charging,
     memberships,
+    orgs,
     parking_spaces,
     payments,
     rates,
@@ -29,3 +30,4 @@ api_router.include_router(reservations.router)
 api_router.include_router(memberships.router)
 api_router.include_router(reports.router)
 api_router.include_router(ev_charging.router)
+api_router.include_router(orgs.router)
