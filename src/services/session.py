@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from src.core.exceptions import NotFoundError, ValidationError
+from src.models.ev_charging import EVChargingStation
 from src.models.parking import ParkingSpace, Zone
 from src.models.session import ParkingSession
 from src.models.vehicle import Vehicle, VehicleType
@@ -21,7 +22,7 @@ from src.schemas.session import (
 from src.services import parking as parking_service
 from src.services import payment as payment_service
 from src.services import vehicle as vehicle_service
-from src.utils.constants import SessionStatus, SpaceStatus
+from src.utils.constants import ChargerType, SessionStatus, SpaceStatus
 
 
 def generate_ticket_number() -> str:
@@ -341,9 +342,25 @@ async def calculate_fee(
 
     total_fee = base_fee
 
+    ev_hourly_rate = None
+    if session.space and session.space.is_ev_charging:
+        result = await db.execute(
+            select(EVChargingStation).where(EVChargingStation.space_id == session.space_id)
+        )
+        station = result.scalar_one_or_none()
+        if station:
+            ev_rate = float(station.price_per_kwh)
+            if station.charger_type == ChargerType.LEVEL2:
+                ev_rate = ev_rate + 0.25
+            ev_hourly_rate = ev_rate * float(station.power_kw) * 0.8
+
     # Apply daily maximum cap if available
     if daily_rate:
         daily_max = float(daily_rate.amount)
+        if ev_hourly_rate is not None:
+            extra = (ev_hourly_rate - effective_hourly_rate) * hours
+            if extra > 0:
+                daily_max = daily_max + extra
         full_days = duration_minutes // (24 * 60)
         remaining_minutes = duration_minutes % (24 * 60)
 

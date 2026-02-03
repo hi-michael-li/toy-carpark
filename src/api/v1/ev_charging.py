@@ -45,8 +45,13 @@ async def start_charging(db: DB, user: ActiveUser, data: ChargingSessionStart):
 
 
 @router.post("/charging/{session_id}/stop", response_model=ChargingSessionStopResponse)
-async def stop_charging(db: DB, user: ActiveUser, session_id: int):
-    return await ev_service.stop_charging(db, session_id)
+async def stop_charging(
+    db: DB,
+    user: ActiveUser,
+    session_id: int,
+    p: str | None = Query(None),
+):
+    return await ev_service.stop_charging(db, session_id, p)
 
 
 @router.get("/charging", response_model=ChargingSessionListResponse)

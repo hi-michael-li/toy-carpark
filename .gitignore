@@ -47,3 +47,5 @@ htmlcov/
 
 # Alembic
 alembic/versions/*.pyc
+
+.private.md
