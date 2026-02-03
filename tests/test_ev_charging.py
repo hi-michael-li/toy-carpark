@@ -6,10 +6,42 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.security import get_password_hash
 from src.models.ev_charging import ChargingSession, EVChargingStation
+from src.models.payment import Discount
 from src.models.parking import Level, ParkingSpace, Zone
+from src.models.session import ParkingSession
 from src.models.user import User
 from src.models.vehicle import Vehicle, VehicleType
-from src.utils.constants import ChargerType, ChargingStatus, SpaceStatus, StationStatus, UserRole
+from src.utils.constants import (
+    ChargerType,
+    ChargingStatus,
+    DiscountType,
+    SessionStatus,
+    SpaceStatus,
+    StationStatus,
+    UserRole,
+)
+
+PROMO_CODE = "EVHALF4"
+LEVEL2_SURCHARGE = 0.25
+PROMO_HOURS = 4
+
+
+def create_promo_discount() -> Discount:
+    now = datetime.now(UTC)
+    return Discount(
+        code=PROMO_CODE,
+        name="EV Promo",
+        discount_type=DiscountType.PERCENTAGE,
+        value=50,
+        valid_from=now - timedelta(days=1),
+        valid_to=now + timedelta(days=1),
+        max_uses=None,
+        current_uses=0,
+        max_uses_per_user=10,
+        min_duration_hours=None,
+        partner_name="EV",
+        is_active=True,
+    )
 
 
 @pytest.fixture
@@ -94,6 +126,14 @@ async def test_list_ev_stations(client: AsyncClient, setup_ev_data: dict):
     assert response.status_code == 200
     data = response.json()
     assert len(data) == 3
+
+
+@pytest.mark.asyncio
+async def test_list_ev_stations_returns_list_type(client: AsyncClient, setup_ev_data: dict):
+    response = await client.get("/api/v1/ev/stations")
+    assert response.status_code == 200
+    data = response.json()
+    assert isinstance(data, list)
 
 
 @pytest.mark.asyncio
@@ -285,3 +325,293 @@ async def test_filter_stations_by_charger_type(client: AsyncClient, setup_ev_dat
     data = response.json()
     # All 3 stations should be available initially
     assert len(data) == 3
+
+
+@pytest.mark.asyncio
+async def test_stop_charging_promo_half_price_first_four_hours(
+    client: AsyncClient, db_session: AsyncSession, auth_headers: dict, setup_ev_data: dict
+):
+    station = setup_ev_data["stations"][0]
+    vehicle = setup_ev_data["vehicle"]
+    space = setup_ev_data["spaces"][0]
+
+    parking_session = ParkingSession(
+        vehicle_id=vehicle.id,
+        space_id=space.id,
+        entry_time=datetime.now(UTC) - timedelta(hours=2),
+        ticket_number="TKT-PROMO-1",
+        status=SessionStatus.ACTIVE,
+    )
+    db_session.add(parking_session)
+    await db_session.flush()
+
+    promo_discount = create_promo_discount()
+    db_session.add(promo_discount)
+
+    charging_session = ChargingSession(
+        station_id=station.id,
+        vehicle_id=vehicle.id,
+        parking_session_id=parking_session.id,
+        start_time=datetime.now(UTC) - timedelta(hours=2),
+        status=ChargingStatus.CHARGING,
+    )
+    db_session.add(charging_session)
+    station.status = StationStatus.IN_USE
+    await db_session.commit()
+    await db_session.refresh(charging_session)
+
+    response = await client.post(
+        f"/api/v1/ev/charging/{charging_session.id}/stop?p={PROMO_CODE}",
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    data = response.json()
+
+    duration_minutes = data["duration_minutes"]
+    hours = duration_minutes / 60
+    promo_hours = min(PROMO_HOURS, hours)
+    full_hours = max(0, hours - PROMO_HOURS)
+    power_kw = float(station.power_kw)
+    level2_rate = float(station.price_per_kwh) + LEVEL2_SURCHARGE
+    expected_cost = round(
+        (promo_hours * power_kw * 0.8 * level2_rate * 0.5)
+        + (full_hours * power_kw * 0.8 * level2_rate),
+        2,
+    )
+    assert data["cost"] == expected_cost
+
+
+@pytest.mark.asyncio
+async def test_stop_charging_promo_caps_after_four_hours(
+    client: AsyncClient, db_session: AsyncSession, auth_headers: dict, setup_ev_data: dict
+):
+    station = setup_ev_data["stations"][0]
+    vehicle = setup_ev_data["vehicle"]
+    space = setup_ev_data["spaces"][0]
+
+    parking_session = ParkingSession(
+        vehicle_id=vehicle.id,
+        space_id=space.id,
+        entry_time=datetime.now(UTC) - timedelta(hours=6),
+        ticket_number="TKT-PROMO-2",
+        status=SessionStatus.ACTIVE,
+    )
+    db_session.add(parking_session)
+    await db_session.flush()
+
+    promo_discount = create_promo_discount()
+    db_session.add(promo_discount)
+
+    charging_session = ChargingSession(
+        station_id=station.id,
+        vehicle_id=vehicle.id,
+        parking_session_id=parking_session.id,
+        start_time=datetime.now(UTC) - timedelta(hours=6),
+        status=ChargingStatus.CHARGING,
+    )
+    db_session.add(charging_session)
+    station.status = StationStatus.IN_USE
+    await db_session.commit()
+    await db_session.refresh(charging_session)
+
+    response = await client.post(
+        f"/api/v1/ev/charging/{charging_session.id}/stop?p={PROMO_CODE}",
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    data = response.json()
+
+    duration_minutes = data["duration_minutes"]
+    hours = duration_minutes / 60
+    promo_hours = min(PROMO_HOURS, hours)
+    full_hours = max(0, hours - PROMO_HOURS)
+    power_kw = float(station.power_kw)
+    level2_rate = float(station.price_per_kwh) + LEVEL2_SURCHARGE
+    expected_cost = round(
+        (promo_hours * power_kw * 0.8 * level2_rate * 0.5)
+        + (full_hours * power_kw * 0.8 * level2_rate),
+        2,
+    )
+    assert data["cost"] == expected_cost
+
+
+@pytest.mark.asyncio
+async def test_stop_charging_promo_ignored_for_non_ev_vehicle(
+    client: AsyncClient, db_session: AsyncSession, auth_headers: dict, setup_ev_data: dict
+):
+    station = setup_ev_data["stations"][0]
+    vehicle_type = setup_ev_data["vehicle_type"]
+    space = setup_ev_data["spaces"][0]
+
+    non_ev_vehicle = Vehicle(
+        license_plate="ICE123",
+        vehicle_type_id=vehicle_type.id,
+        is_ev=False,
+    )
+    db_session.add(non_ev_vehicle)
+    await db_session.flush()
+
+    promo_discount = create_promo_discount()
+    db_session.add(promo_discount)
+
+    parking_session = ParkingSession(
+        vehicle_id=non_ev_vehicle.id,
+        space_id=space.id,
+        entry_time=datetime.now(UTC) - timedelta(hours=2),
+        ticket_number="TKT-PROMO-3",
+        status=SessionStatus.ACTIVE,
+    )
+    db_session.add(parking_session)
+    await db_session.flush()
+
+    charging_session = ChargingSession(
+        station_id=station.id,
+        vehicle_id=non_ev_vehicle.id,
+        parking_session_id=parking_session.id,
+        start_time=datetime.now(UTC) - timedelta(hours=2),
+        status=ChargingStatus.CHARGING,
+    )
+    db_session.add(charging_session)
+    station.status = StationStatus.IN_USE
+    await db_session.commit()
+    await db_session.refresh(charging_session)
+
+    response = await client.post(
+        f"/api/v1/ev/charging/{charging_session.id}/stop?p={PROMO_CODE}",
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    data = response.json()
+
+    duration_minutes = data["duration_minutes"]
+    hours = duration_minutes / 60
+    power_kw = float(station.power_kw)
+    level2_rate = float(station.price_per_kwh) + LEVEL2_SURCHARGE
+    expected_cost = round(hours * power_kw * 0.8 * level2_rate, 2)
+    assert data["cost"] == expected_cost
+
+
+@pytest.mark.asyncio
+async def test_stop_charging_promo_ignored_without_parking_session(
+    client: AsyncClient, db_session: AsyncSession, auth_headers: dict, setup_ev_data: dict
+):
+    station = setup_ev_data["stations"][0]
+    vehicle = setup_ev_data["vehicle"]
+
+    charging_session = ChargingSession(
+        station_id=station.id,
+        vehicle_id=vehicle.id,
+        parking_session_id=None,
+        start_time=datetime.now(UTC) - timedelta(hours=2),
+        status=ChargingStatus.CHARGING,
+    )
+    db_session.add(charging_session)
+    station.status = StationStatus.IN_USE
+    promo_discount = create_promo_discount()
+    db_session.add(promo_discount)
+    await db_session.commit()
+    await db_session.refresh(charging_session)
+
+    response = await client.post(
+        f"/api/v1/ev/charging/{charging_session.id}/stop?p={PROMO_CODE}",
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    data = response.json()
+
+    duration_minutes = data["duration_minutes"]
+    hours = duration_minutes / 60
+    power_kw = float(station.power_kw)
+    level2_rate = float(station.price_per_kwh) + LEVEL2_SURCHARGE
+    expected_cost = round(hours * power_kw * 0.8 * level2_rate, 2)
+    assert data["cost"] == expected_cost
+
+
+@pytest.mark.asyncio
+async def test_stop_charging_promo_ignored_for_non_ev_space(
+    client: AsyncClient, db_session: AsyncSession, auth_headers: dict, setup_ev_data: dict
+):
+    station = setup_ev_data["stations"][0]
+    vehicle = setup_ev_data["vehicle"]
+    zone = setup_ev_data["zone"]
+
+    non_ev_space = ParkingSpace(
+        zone_id=zone.id,
+        space_number="S-100",
+        floor=0,
+        status=SpaceStatus.AVAILABLE,
+        is_ev_charging=False,
+    )
+    db_session.add(non_ev_space)
+    await db_session.flush()
+
+    parking_session = ParkingSession(
+        vehicle_id=vehicle.id,
+        space_id=non_ev_space.id,
+        entry_time=datetime.now(UTC) - timedelta(hours=2),
+        ticket_number="TKT-PROMO-4",
+        status=SessionStatus.ACTIVE,
+    )
+    db_session.add(parking_session)
+    await db_session.flush()
+
+    promo_discount = create_promo_discount()
+    db_session.add(promo_discount)
+
+    charging_session = ChargingSession(
+        station_id=station.id,
+        vehicle_id=vehicle.id,
+        parking_session_id=parking_session.id,
+        start_time=datetime.now(UTC) - timedelta(hours=2),
+        status=ChargingStatus.CHARGING,
+    )
+    db_session.add(charging_session)
+    station.status = StationStatus.IN_USE
+    await db_session.commit()
+    await db_session.refresh(charging_session)
+
+    response = await client.post(
+        f"/api/v1/ev/charging/{charging_session.id}/stop?p={PROMO_CODE}",
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    data = response.json()
+
+    duration_minutes = data["duration_minutes"]
+    hours = duration_minutes / 60
+    power_kw = float(station.power_kw)
+    level2_rate = float(station.price_per_kwh) + LEVEL2_SURCHARGE
+    expected_cost = round(hours * power_kw * 0.8 * level2_rate, 2)
+    assert data["cost"] == expected_cost
+
+
+@pytest.mark.asyncio
+async def test_stop_charging_dc_fast_uses_station_price(
+    client: AsyncClient, db_session: AsyncSession, auth_headers: dict, setup_ev_data: dict
+):
+    station = setup_ev_data["stations"][2]
+    vehicle = setup_ev_data["vehicle"]
+
+    charging_session = ChargingSession(
+        station_id=station.id,
+        vehicle_id=vehicle.id,
+        start_time=datetime.now(UTC) - timedelta(hours=1),
+        status=ChargingStatus.CHARGING,
+    )
+    db_session.add(charging_session)
+    station.status = StationStatus.IN_USE
+    await db_session.commit()
+    await db_session.refresh(charging_session)
+
+    response = await client.post(
+        f"/api/v1/ev/charging/{charging_session.id}/stop",
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    data = response.json()
+
+    duration_minutes = data["duration_minutes"]
+    hours = duration_minutes / 60
+    power_kw = float(station.power_kw)
+    expected_cost = round(hours * power_kw * 0.8 * float(station.price_per_kwh), 2)
+    assert data["cost"] == expected_cost

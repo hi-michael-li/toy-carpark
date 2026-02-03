@@ -7,6 +7,8 @@ from sqlalchemy.orm import selectinload
 from src.core.exceptions import NotFoundError, ValidationError
 from src.models.ev_charging import ChargingSession, EVChargingStation
 from src.models.parking import ParkingSpace, Zone
+from src.models.session import ParkingSession
+from src.models.vehicle import Vehicle
 from src.schemas.ev_charging import (
     ChargingSessionListResponse,
     ChargingSessionResponse,
@@ -16,7 +18,8 @@ from src.schemas.ev_charging import (
     EVChargingStationResponse,
     EVChargingStationUpdate,
 )
-from src.utils.constants import ChargingStatus, StationStatus
+from src.services import payment as payment_service
+from src.utils.constants import ChargerType, ChargingStatus, DiscountType, StationStatus
 
 
 async def get_stations(
@@ -112,7 +115,9 @@ async def start_charging(db: AsyncSession, data: ChargingSessionStart) -> Chargi
     return ChargingSessionResponse.model_validate(session)
 
 
-async def stop_charging(db: AsyncSession, session_id: int) -> ChargingSessionStopResponse:
+async def stop_charging(
+    db: AsyncSession, session_id: int, p: str | None = None
+) -> ChargingSessionStopResponse:
     result = await db.execute(
         select(ChargingSession).where(ChargingSession.id == session_id)
     )
@@ -138,9 +143,50 @@ async def stop_charging(db: AsyncSession, session_id: int) -> ChargingSessionSto
     )
     station = result.scalar_one()
 
-    energy_kwh = hours * station.power_kw * 0.8
+    rate = float(station.price_per_kwh)
+    if station.charger_type == ChargerType.LEVEL2:
+        rate = rate + 0.25
+
+    power_kw = float(station.power_kw)
+    energy_kwh = hours * power_kw * 0.8
     session.energy_kwh = round(energy_kwh, 2)
-    session.cost = round(energy_kwh * float(station.price_per_kwh), 2)
+
+    promo_code = p.strip() if p else None
+    promo = None
+    if promo_code:
+        validation = await payment_service.validate_discount(db, promo_code)
+        if validation.is_valid and validation.discount:
+            promo = validation.discount
+
+    promo_ok = False
+    if promo:
+        result = await db.execute(select(Vehicle).where(Vehicle.id == session.vehicle_id))
+        vehicle = result.scalar_one_or_none()
+        if vehicle and vehicle.is_ev and session.parking_session_id:
+            result = await db.execute(
+                select(ParkingSession).where(ParkingSession.id == session.parking_session_id)
+            )
+            parking_session = result.scalar_one_or_none()
+            if parking_session and parking_session.space_id:
+                result = await db.execute(
+                    select(ParkingSpace).where(ParkingSpace.id == parking_session.space_id)
+                )
+                space = result.scalar_one_or_none()
+                if space and space.is_ev_charging:
+                    promo_ok = True
+
+    if promo_ok and promo and promo.discount_type == DiscountType.PERCENTAGE:
+        discount_pct = float(promo.value) / 100
+        discount_rate = max(0.0, min(1.0, 1 - discount_pct))
+        promo_hours = min(4, hours)
+        full_hours = max(0, hours - 4)
+        promo_energy = promo_hours * power_kw * 0.8
+        full_energy = full_hours * power_kw * 0.8
+        cost = (promo_energy * rate * discount_rate) + (full_energy * rate)
+    else:
+        cost = energy_kwh * rate
+
+    session.cost = round(cost, 2)
 
     station.status = StationStatus.AVAILABLE
 
