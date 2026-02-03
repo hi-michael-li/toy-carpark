@@ -24,6 +24,7 @@ class User(BaseModel):
     memberships: Mapped[list["Membership"]] = relationship(back_populates="user")  # noqa: F821
     reservations: Mapped[list["Reservation"]] = relationship(back_populates="user")  # noqa: F821
     operator: Mapped["Operator | None"] = relationship(back_populates="user")
+    org_memberships: Mapped[list["OrganizationMember"]] = relationship(back_populates="user")  # noqa: F821
 
 
 class Operator(BaseModel):
