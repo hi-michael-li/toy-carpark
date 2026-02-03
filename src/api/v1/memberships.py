@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Query
 
 from src.core.dependencies import DB, ActiveUser, AdminUser, Pagination
+from src.core.exceptions import AuthorizationError
 from src.schemas.membership import (
     MembershipCreate,
     MembershipListResponse,
@@ -12,7 +13,7 @@ from src.schemas.membership import (
     MembershipUsageStats,
 )
 from src.services import membership as membership_service
-from src.utils.constants import MembershipStatus
+from src.utils.constants import MembershipStatus, UserRole
 
 router = APIRouter(prefix="/memberships", tags=["Memberships"])
 
@@ -55,19 +56,31 @@ async def list_memberships(
 
 @router.get("/{membership_id}", response_model=MembershipResponse)
 async def get_membership(db: DB, user: ActiveUser, membership_id: int):
-    return await membership_service.get_membership_by_id(db, membership_id)
+    membership = await membership_service.get_membership_by_id(db, membership_id)
+    if user.role != UserRole.ADMIN and membership.user_id != user.id:
+        raise AuthorizationError("Not allowed to access this membership")
+    return membership
 
 
 @router.get("/{membership_id}/usage", response_model=MembershipUsageStats)
 async def get_membership_usage(db: DB, user: ActiveUser, membership_id: int):
+    membership = await membership_service.get_membership_by_id(db, membership_id)
+    if user.role != UserRole.ADMIN and membership.user_id != user.id:
+        raise AuthorizationError("Not allowed to access this membership")
     return await membership_service.get_membership_usage(db, membership_id)
 
 
 @router.post("/{membership_id}/cancel", response_model=MembershipResponse)
 async def cancel_membership(db: DB, user: ActiveUser, membership_id: int):
+    membership = await membership_service.get_membership_by_id(db, membership_id)
+    if user.role != UserRole.ADMIN and membership.user_id != user.id:
+        raise AuthorizationError("Not allowed to cancel this membership")
     return await membership_service.cancel_membership(db, membership_id)
 
 
 @router.post("/{membership_id}/renew", response_model=MembershipSubscribeResponse)
 async def renew_membership(db: DB, user: ActiveUser, membership_id: int):
+    membership = await membership_service.get_membership_by_id(db, membership_id)
+    if user.role != UserRole.ADMIN and membership.user_id != user.id:
+        raise AuthorizationError("Not allowed to renew this membership")
     return await membership_service.renew_membership(db, membership_id)

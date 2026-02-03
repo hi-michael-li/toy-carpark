@@ -2,8 +2,33 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.core.security import get_password_hash
+from src.models.user import User
 from src.models.vehicle import VehicleType
-from src.utils.constants import SizeCategory
+from src.utils.constants import SizeCategory, UserRole
+
+
+async def create_admin_user(db_session: AsyncSession) -> User:
+    admin = User(
+        email="admin@example.com",
+        hashed_password=get_password_hash("adminpass123"),
+        full_name="Admin User",
+        role=UserRole.ADMIN,
+    )
+    db_session.add(admin)
+    await db_session.commit()
+    return admin
+
+
+@pytest.fixture
+async def admin_headers(client: AsyncClient, db_session: AsyncSession) -> dict:
+    await create_admin_user(db_session)
+    response = await client.post(
+        "/api/v1/auth/login",
+        data={"username": "admin@example.com", "password": "adminpass123"},
+    )
+    token = response.json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
 
 
 @pytest.mark.asyncio
@@ -25,11 +50,11 @@ async def test_list_vehicle_types(client: AsyncClient, db_session: AsyncSession)
 
 
 @pytest.mark.asyncio
-async def test_create_vehicle_type(client: AsyncClient, auth_headers: dict):
+async def test_create_vehicle_type(client: AsyncClient, admin_headers: dict):
     response = await client.post(
         "/api/v1/vehicles/types",
         json={"name": "Truck", "size_category": "extra_large", "description": "Large trucks"},
-        headers=auth_headers,
+        headers=admin_headers,
     )
     assert response.status_code == 200
     data = response.json()

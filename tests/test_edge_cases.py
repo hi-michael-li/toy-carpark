@@ -478,7 +478,6 @@ class TestReservationEdgeCases:
     async def test_checkin_to_cancelled_reservation_fails(
         self,
         client: AsyncClient,
-        operator_headers: dict,
         edge_case_setup: dict,
     ):
         """
@@ -527,7 +526,7 @@ class TestReservationEdgeCases:
         # Try to check in
         checkin = await client.post(
             f"/api/v1/reservations/{res_id}/check-in",
-            headers=operator_headers,
+            headers=user_headers,
         )
         # Should fail - reservation is cancelled
         assert checkin.status_code == 422

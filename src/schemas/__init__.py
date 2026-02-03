@@ -6,7 +6,7 @@ from src.schemas.auth import (
     Token,
     TokenRefresh,
 )
-from src.schemas.common import BaseSchema, MessageResponse, PaginatedResponse, TimestampSchema
+from src.schemas.common import BaseSchema, MessageResponse, TimestampSchema
 from src.schemas.ev_charging import (
     ChargingSessionListResponse,
     ChargingSessionResponse,
@@ -110,7 +110,6 @@ from src.schemas.vehicle import (
 __all__ = [
     "BaseSchema",
     "MessageResponse",
-    "PaginatedResponse",
     "TimestampSchema",
     "Token",
     "TokenRefresh",

@@ -3,6 +3,7 @@ from datetime import datetime
 from fastapi import APIRouter, Query
 
 from src.core.dependencies import DB, ActiveUser, Pagination
+from src.core.exceptions import AuthorizationError
 from src.schemas.reservation import (
     AvailabilityResponse,
     CheckInResponse,
@@ -15,7 +16,7 @@ from src.schemas.reservation import (
     ReservationUpdate,
 )
 from src.services import reservation as reservation_service
-from src.utils.constants import ReservationStatus
+from src.utils.constants import ReservationStatus, UserRole
 
 router = APIRouter(prefix="/reservations", tags=["Reservations"])
 
@@ -49,7 +50,10 @@ async def check_availability(
 
 @router.get("/{reservation_id}", response_model=ReservationResponse)
 async def get_reservation(db: DB, user: ActiveUser, reservation_id: int):
-    return await reservation_service.get_reservation_by_id(db, reservation_id)
+    reservation = await reservation_service.get_reservation_by_id(db, reservation_id)
+    if user.role != UserRole.ADMIN and reservation.user_id != user.id:
+        raise AuthorizationError("Not allowed to access this reservation")
+    return reservation
 
 
 @router.get("/confirm/{confirmation_number}", response_model=ReservationResponse)
@@ -61,6 +65,9 @@ async def get_reservation_by_confirmation(db: DB, confirmation_number: str):
 async def update_reservation(
     db: DB, user: ActiveUser, reservation_id: int, data: ReservationUpdate
 ):
+    reservation = await reservation_service.get_reservation_by_id(db, reservation_id)
+    if user.role != UserRole.ADMIN and reservation.user_id != user.id:
+        raise AuthorizationError("Not allowed to update this reservation")
     return await reservation_service.update_reservation(db, reservation_id, data)
 
 
@@ -68,10 +75,16 @@ async def update_reservation(
 async def cancel_reservation(
     db: DB, user: ActiveUser, reservation_id: int, data: ReservationCancelRequest | None = None
 ):
+    reservation = await reservation_service.get_reservation_by_id(db, reservation_id)
+    if user.role != UserRole.ADMIN and reservation.user_id != user.id:
+        raise AuthorizationError("Not allowed to cancel this reservation")
     reason = data.reason if data else None
     return await reservation_service.cancel_reservation(db, reservation_id, reason)
 
 
 @router.post("/{reservation_id}/check-in", response_model=CheckInResponse)
 async def check_in_reservation(db: DB, user: ActiveUser, reservation_id: int):
+    reservation = await reservation_service.get_reservation_by_id(db, reservation_id)
+    if user.role != UserRole.ADMIN and reservation.user_id != user.id:
+        raise AuthorizationError("Not allowed to check in this reservation")
     return await reservation_service.check_in_reservation(db, reservation_id)

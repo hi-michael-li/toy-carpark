@@ -1,7 +1,7 @@
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.exceptions import NotFoundError, PaymentError
@@ -89,6 +89,7 @@ async def get_applicable_rate(
         .where(
             Rate.is_active == True,  # noqa: E712
             Rate.effective_from <= now,
+            or_(Rate.effective_to.is_(None), Rate.effective_to >= now),
             Rate.rate_type == rate_type,
         )
         .order_by(Rate.effective_from.desc())
@@ -277,7 +278,7 @@ async def process_payment(
     payment = Payment(
         session_id=data.session_id,
         user_id=user_id,
-        amount=fee_calc.base_fee,
+        amount=fee_calc.total,
         payment_method=data.payment_method,
         status=PaymentStatus.COMPLETED,
         discount_id=discount_id,

@@ -88,13 +88,7 @@ async def get_available_spaces(
 
 @router.get("/spaces/{space_id}", response_model=ParkingSpaceResponse)
 async def get_space(db: DB, user: ActiveUser, space_id: int):
-    spaces = await parking_service.get_spaces(db, 1, 1)
-    for space in spaces.spaces:
-        if space.id == space_id:
-            return space
-    from src.core.exceptions import NotFoundError
-
-    raise NotFoundError("Space not found")
+    return await parking_service.get_space_by_id(db, space_id)
 
 
 @router.patch("/spaces/{space_id}/status", response_model=ParkingSpaceResponse)

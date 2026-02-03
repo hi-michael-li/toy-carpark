@@ -14,10 +14,3 @@ class TimestampSchema(BaseSchema):
 
 class MessageResponse(BaseSchema):
     message: str
-
-
-class PaginatedResponse(BaseSchema):
-    total: int
-    page: int
-    limit: int
-    pages: int

@@ -32,9 +32,16 @@ def generate_confirmation_number() -> str:
 async def create_reservation(
     db: AsyncSession, user_id: int, data: ReservationCreate
 ) -> ReservationCreateResponse:
-    if data.start_time >= data.end_time:
+    start_time = data.start_time
+    end_time = data.end_time
+    if start_time.tzinfo is None:
+        start_time = start_time.replace(tzinfo=UTC)
+    if end_time.tzinfo is None:
+        end_time = end_time.replace(tzinfo=UTC)
+
+    if start_time >= end_time:
         raise ValidationError("End time must be after start time")
-    if data.start_time < datetime.now(UTC):
+    if start_time < datetime.now(UTC):
         raise ValidationError("Cannot create reservation in the past")
 
     if data.space_id:
@@ -44,16 +51,16 @@ async def create_reservation(
                 Reservation.status.in_([ReservationStatus.PENDING, ReservationStatus.CONFIRMED]),
                 or_(
                     and_(
-                        Reservation.start_time <= data.start_time,
-                        Reservation.end_time > data.start_time,
+                        Reservation.start_time <= start_time,
+                        Reservation.end_time > start_time,
                     ),
                     and_(
-                        Reservation.start_time < data.end_time,
-                        Reservation.end_time >= data.end_time,
+                        Reservation.start_time < end_time,
+                        Reservation.end_time >= end_time,
                     ),
                     and_(
-                        Reservation.start_time >= data.start_time,
-                        Reservation.end_time <= data.end_time,
+                        Reservation.start_time >= start_time,
+                        Reservation.end_time <= end_time,
                     ),
                 ),
             )
@@ -61,13 +68,20 @@ async def create_reservation(
         if result.scalar_one_or_none():
             raise ReservationConflictError("Space is already reserved for this time period")
 
+        result = await db.execute(select(ParkingSpace).where(ParkingSpace.id == data.space_id))
+        space = result.scalar_one_or_none()
+        if not space:
+            raise NotFoundError("Parking space not found")
+        if space.status == SpaceStatus.AVAILABLE:
+            space.status = SpaceStatus.RESERVED
+
     reservation = Reservation(
         user_id=user_id,
         vehicle_id=data.vehicle_id,
         space_id=data.space_id,
         zone_id=data.zone_id,
-        start_time=data.start_time,
-        end_time=data.end_time,
+        start_time=start_time,
+        end_time=end_time,
         status=ReservationStatus.CONFIRMED,
         confirmation_number=generate_confirmation_number(),
         reservation_fee=0,
@@ -207,6 +221,13 @@ async def cancel_reservation(
     reservation.status = ReservationStatus.CANCELLED
     reservation.cancelled_at = datetime.now(UTC)
     reservation.cancellation_reason = reason
+    if reservation.space_id:
+        result = await db.execute(
+            select(ParkingSpace).where(ParkingSpace.id == reservation.space_id)
+        )
+        space = result.scalar_one_or_none()
+        if space and space.status == SpaceStatus.RESERVED:
+            space.status = SpaceStatus.AVAILABLE
 
     await db.flush()
     await db.refresh(reservation)

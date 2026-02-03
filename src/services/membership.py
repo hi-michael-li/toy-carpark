@@ -24,8 +24,8 @@ async def get_membership_plans(
     db: AsyncSession, is_active: bool = True
 ) -> list[MembershipPlanResponse]:
     query = select(MembershipPlan)
-    if is_active:
-        query = query.where(MembershipPlan.is_active == True)  # noqa: E712
+    if is_active is not None:
+        query = query.where(MembershipPlan.is_active == is_active)
     result = await db.execute(query)
     plans = result.scalars().all()
     return [MembershipPlanResponse.model_validate(p) for p in plans]

@@ -319,7 +319,6 @@ class TestReservationTimingEdgeCases:
     async def test_reservation_early_arrival(
         self,
         client: AsyncClient,
-        operator_headers: dict,
         advanced_setup: dict,
     ):
         """
@@ -362,7 +361,7 @@ class TestReservationTimingEdgeCases:
         # Try to check in now (2 hours early)
         checkin = await client.post(
             f"/api/v1/reservations/{res_id}/check-in",
-            headers=operator_headers,
+            headers=user_headers,
         )
         # System might allow early check-in or reject it
         # This documents the behavior

@@ -153,6 +153,18 @@ async def get_spaces(
     )
 
 
+async def get_space_by_id(db: AsyncSession, space_id: int) -> ParkingSpaceResponse:
+    result = await db.execute(
+        select(ParkingSpace)
+        .where(ParkingSpace.id == space_id)
+        .options(selectinload(ParkingSpace.zone).selectinload(Zone.level))
+    )
+    space = result.scalar_one_or_none()
+    if not space:
+        raise NotFoundError("Parking space not found")
+    return ParkingSpaceResponse.model_validate(space)
+
+
 async def create_space(db: AsyncSession, data: ParkingSpaceCreate) -> ParkingSpaceResponse:
     space = ParkingSpace(**data.model_dump())
     db.add(space)
@@ -198,8 +210,8 @@ async def get_available_spaces(
 
     if zone_id:
         query = query.where(ParkingSpace.zone_id == zone_id)
-    if is_ev:
-        query = query.where(ParkingSpace.is_ev_charging == True)  # noqa: E712
+    if is_ev is not None:
+        query = query.where(ParkingSpace.is_ev_charging == is_ev)
 
     query = query.options(
         selectinload(ParkingSpace.zone).selectinload(Zone.level)
